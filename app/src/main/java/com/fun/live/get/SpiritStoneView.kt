@@ -2,6 +2,7 @@ package com.`fun`.live.get
 
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
@@ -10,9 +11,13 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -22,6 +27,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import kotlin.math.PI
 import kotlin.math.cos
@@ -30,19 +36,35 @@ import kotlin.math.sin
 /**
  * Floating Purple Spirit Stone & Supreme Crystal (悬空紫色灵石 / 至尊水晶)
  *
- * Requirements:
+ * Features:
  * 1. Floating hovering animation (悬空动画)
- * 2. Size volume grows as spirit stone count increases (随着灵石增加，体积增大)
- * 3. Deep purple & multi-colored Supreme Crystal texture (紫色质感 & 至尊水晶)
- * 4. Flowing light sheen streamer quality (流光品质质感)
- * 5. Level scales up to Level 100 (支持 1 到 100 阶至尊水晶进化)
+ * 2. Size volume grows as spirit stone count & level increases
+ * 3. Deep purple & multi-colored Supreme Crystal texture
+ * 4. Flowing light sheen streamer quality
+ * 5. Press Expansion Animation: Holds & swells up to Level 100 max size, slowly retreats on release
  */
 @Composable
 fun SpiritStoneView(
     spiritStoneCount: Int,
     level: Int,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onGather: (() -> Unit)? = null
 ) {
+    var isPressed by remember { mutableStateOf(false) }
+
+    // Press expansion progress (0.0f = normal current level, 1.0f = expanded to Level 100)
+    val pressProgressAnim by animateFloatAsState(
+        targetValue = if (isPressed) 1.0f else 0.0f,
+        animationSpec = if (isPressed) {
+            // Smooth swelling up to Level 100 size while holding
+            tween(durationMillis = 1600, easing = LinearOutSlowInEasing)
+        } else {
+            // Slowly retreat back to original level size when released
+            tween(durationMillis = 2200, easing = FastOutSlowInEasing)
+        },
+        label = "PressExpansionProgress"
+    )
+
     val infiniteTransition = rememberInfiniteTransition(label = "SpiritStoneAnimation")
 
     // 1. Floating vertical bobbing animation
@@ -56,7 +78,7 @@ fun SpiritStoneView(
         label = "FloatBob"
     )
 
-    // 2. Subtle rocking/sway rotation angle (-4° to +4°)
+    // 2. Subtle rocking/sway rotation angle (-3.5° to +3.5°)
     val swayAnim by infiniteTransition.animateFloat(
         initialValue = -3.5f,
         targetValue = 3.5f,
@@ -90,22 +112,43 @@ fun SpiritStoneView(
     )
 
     // 5. Volume/Scale Growth based on Level (1 to 100) and Spirit Stone count (0 to 100)
-    // Base scale at Level 1 starts at 0.65f.
-    // Level growth adds +0.70f proportionally from Level 1 -> Level 100.
-    // Count growth adds +0.18f as spirit stone count fills from 0 to 100 within current level.
-    val levelGrowth = ((level.coerceIn(1, 100) - 1) / 99f) * 0.70f
-    val countGrowth = (spiritStoneCount.coerceIn(0, 100) / 100f) * 0.18f
-    val targetScale = 0.65f + levelGrowth + countGrowth
+    val actualLevelGrowth = ((level.coerceIn(1, 100) - 1) / 99f) * 0.70f
+    val actualCountGrowth = (spiritStoneCount.coerceIn(0, 100) / 100f) * 0.18f
+    val actualTargetScale = 0.65f + actualLevelGrowth + actualCountGrowth
+
+    // Max Level 100 Scale (0.65 + 0.70 + 0.18 = 1.53f)
+    val maxLevel100Scale = 1.53f
+
+    // Interpolate effective scale during press expansion
+    val currentEffectiveScale = actualTargetScale + (maxLevel100Scale - actualTargetScale) * pressProgressAnim
 
     val animatedScale by animateFloatAsState(
-        targetValue = targetScale,
+        targetValue = currentEffectiveScale,
         animationSpec = spring(stiffness = 180f, dampingRatio = 0.55f),
         label = "VolumeScaleGrowth"
     )
 
-    val isSupremeCrystal = level >= 90
+    // Dynamic visual level interpolation during press expansion
+    val effectiveLevel = (level + ((100 - level) * pressProgressAnim)).toInt().coerceIn(1, 100)
+    val isSupremeCrystal = effectiveLevel >= 90
 
-    Canvas(modifier = modifier.fillMaxSize()) {
+    Canvas(
+        modifier = modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onPress = {
+                        isPressed = true
+                        onGather?.invoke()
+                        try {
+                            awaitRelease()
+                        } finally {
+                            isPressed = false
+                        }
+                    }
+                )
+            }
+    ) {
         val center = Offset(size.width / 2f, size.height / 2f)
         val verticalOffset = (sin(floatAnim * PI).toFloat() - 0.5f) * 28.dp.toPx()
         val stoneCenter = Offset(center.x, center.y + verticalOffset)
@@ -140,7 +183,7 @@ fun SpiritStoneView(
         )
 
         // --- B. Orbiting Celestial Spirit Rings (Level 2+ to 100) ---
-        if (level >= 2) {
+        if (effectiveLevel >= 2) {
             rotate(degrees = orbitRotation, pivot = stoneCenter) {
                 drawOval(
                     brush = Brush.sweepGradient(
@@ -161,7 +204,7 @@ fun SpiritStoneView(
             }
         }
 
-        if (level >= 3 || isSupremeCrystal) {
+        if (effectiveLevel >= 3) {
             rotate(degrees = -orbitRotation * 1.4f, pivot = stoneCenter) {
                 drawOval(
                     brush = Brush.sweepGradient(
@@ -181,7 +224,7 @@ fun SpiritStoneView(
         }
 
         // Level 50+ / Supreme Crystal Triple Ring
-        if (level >= 50) {
+        if (effectiveLevel >= 50) {
             rotate(degrees = orbitRotation * 2.0f, pivot = stoneCenter) {
                 drawOval(
                     brush = Brush.sweepGradient(
@@ -206,7 +249,7 @@ fun SpiritStoneView(
                 scope = this,
                 center = stoneCenter,
                 radius = baseRadius,
-                level = level,
+                level = effectiveLevel,
                 streamerProgress = streamerAnim,
                 isSupremeCrystal = isSupremeCrystal
             )

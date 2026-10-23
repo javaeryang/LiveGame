@@ -385,6 +385,7 @@ fun SpiritStoneScreen() {
                         SpiritStoneView(
                             spiritStoneCount = if (level >= 100) 100 else spiritStoneCount,
                             level = level,
+                            onGather = { gatherSpiritStone() },
                             modifier = Modifier
                                 .size(280.dp)
                                 .padding(bottom = 60.dp)
