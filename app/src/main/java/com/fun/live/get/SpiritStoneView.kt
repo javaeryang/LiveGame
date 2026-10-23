@@ -89,11 +89,17 @@ fun SpiritStoneView(
         label = "OrbitRotation"
     )
 
-    // 5. Volume/Scale Growth based on Spirit Stone count (0 to 100)
-    val targetScale = 1.0f + (spiritStoneCount.coerceIn(0, 100) / 100f) * 0.45f
+    // 5. Volume/Scale Growth based on Level (1 to 100) and Spirit Stone count (0 to 100)
+    // Base scale at Level 1 starts at 0.65f.
+    // Level growth adds +0.70f proportionally from Level 1 -> Level 100.
+    // Count growth adds +0.18f as spirit stone count fills from 0 to 100 within current level.
+    val levelGrowth = ((level.coerceIn(1, 100) - 1) / 99f) * 0.70f
+    val countGrowth = (spiritStoneCount.coerceIn(0, 100) / 100f) * 0.18f
+    val targetScale = 0.65f + levelGrowth + countGrowth
+
     val animatedScale by animateFloatAsState(
         targetValue = targetScale,
-        animationSpec = spring(stiffness = 200f, dampingRatio = 0.6f),
+        animationSpec = spring(stiffness = 180f, dampingRatio = 0.55f),
         label = "VolumeScaleGrowth"
     )
 

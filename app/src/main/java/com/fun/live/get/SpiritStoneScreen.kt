@@ -911,6 +911,8 @@ private fun LevelPreviewDialog(
     onClose: () -> Unit
 ) {
     val listState = rememberLazyListState()
+    var selectedLevel by remember { mutableIntStateOf(currentLevel) }
+    val selectedTier = LEVEL_TIERS_LIST.getOrNull((selectedLevel - 1).coerceIn(0, 99)) ?: LEVEL_TIERS_LIST[0]
 
     // Auto scroll to current active level in tier list
     LaunchedEffect(currentLevel) {
@@ -921,8 +923,8 @@ private fun LevelPreviewDialog(
 
     Surface(
         modifier = Modifier
-            .fillMaxWidth(0.92f)
-            .fillMaxHeight(0.82f)
+            .fillMaxWidth(0.94f)
+            .fillMaxHeight(0.86f)
             .clip(RoundedCornerShape(24.dp)),
         color = Color(0xFF16002A)
     ) {
@@ -930,7 +932,7 @@ private fun LevelPreviewDialog(
             modifier = Modifier
                 .fillMaxSize()
                 .border(2.dp, Color(0xFFFFD700), RoundedCornerShape(24.dp))
-                .padding(20.dp)
+                .padding(16.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -951,73 +953,199 @@ private fun LevelPreviewDialog(
                 )
             }
 
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "支持 1 到 100 阶至尊水晶进化 · 当前位阶: 第 $currentLevel 阶",
+                text = "点击列表项预览任意阶位灵石 3D 特效 · 当前位阶: 第 $currentLevel 阶",
                 color = Color(0xFFE040FB),
-                fontSize = 12.sp
+                fontSize = 11.sp
             )
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
+            // --- A. Top Spotlight Preview Card (选中阶位 3D 悬浮灵石效果全景预览) ---
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(
+                                Color(0xFF38006B),
+                                Color(0xFF1F003D)
+                            )
+                        )
+                    )
+                    .border(
+                        width = 1.5.dp,
+                        brush = Brush.horizontalGradient(
+                            colors = listOf(
+                                Color(0xFFFFD700),
+                                Color(0xFFE040FB),
+                                Color(0xFF00E5FF)
+                            )
+                        ),
+                        shape = RoundedCornerShape(18.dp)
+                    )
+                    .padding(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Left: Interactive 3D Spirit Stone View Spotlight
+                    Box(
+                        modifier = Modifier
+                            .size(105.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Color(0xFF0D001A)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        SpiritStoneView(
+                            spiritStoneCount = 100,
+                            level = selectedLevel,
+                            modifier = Modifier.size(100.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    // Right: Selected Tier Info
+                    Column(
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "第 $selectedLevel 阶 · ${selectedTier.name}",
+                                color = Color(0xFFFFD700),
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            val isSelectedUnlocked = selectedLevel <= currentLevel
+                            Text(
+                                text = if (selectedLevel == currentLevel) "★ 当前" else if (isSelectedUnlocked) "已解锁" else "未解锁",
+                                color = if (selectedLevel == currentLevel) Color(0xFF00E5FF) else if (isSelectedUnlocked) Color(0xFF00E676) else Color.Gray,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = selectedTier.description,
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            maxLines = 2
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = selectedTier.features,
+                            color = Color(0xFFEA80FC),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // --- B. Tier List with Live Spirit Stone Thumbnails (百阶图鉴列表) ---
             LazyColumn(
                 state = listState,
                 modifier = Modifier.weight(1f)
             ) {
                 items(LEVEL_TIERS_LIST) { tier ->
                     val isCurrent = tier.level == currentLevel
+                    val isSelected = tier.level == selectedLevel
                     val isUnlocked = tier.level <= currentLevel
 
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 5.dp)
+                            .padding(vertical = 4.dp)
                             .clip(RoundedCornerShape(16.dp))
                             .background(
-                                if (isCurrent) Color(0xFF4A148C)
+                                if (isSelected) Color(0xFF4A148C)
                                 else if (isUnlocked) Color(0xFF26004D)
                                 else Color(0xFF1A0033)
                             )
                             .border(
-                                width = if (isCurrent) 1.5.dp else 0.5.dp,
-                                color = if (isCurrent) Color(0xFFFFD700)
+                                width = if (isSelected) 1.5.dp else if (isCurrent) 1.dp else 0.5.dp,
+                                color = if (isSelected) Color(0xFFFFD700)
+                                else if (isCurrent) Color(0xFF00E5FF)
                                 else if (isUnlocked) Color(0xFF8E24AA)
                                 else Color(0x338E24AA),
                                 shape = RoundedCornerShape(16.dp)
                             )
-                            .padding(12.dp)
+                            .clickable { selectedLevel = tier.level }
+                            .padding(10.dp)
                     ) {
-                        Column {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Spirit Stone Live Miniature Preview (左侧灵石 3D 模型预览)
+                            Box(
+                                modifier = Modifier
+                                    .size(56.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color(0xFF10002B))
+                                    .border(
+                                        width = 0.8.dp,
+                                        color = if (isSelected) Color(0xFFFFD700) else Color(0x44BA68C8),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Text(
-                                    text = "第 ${tier.level} 阶 · ${tier.name}",
-                                    color = if (isUnlocked) Color(0xFFFFD700) else Color.Gray,
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = if (isCurrent) "★ 当前位阶" else if (isUnlocked) "已解锁" else "未解锁",
-                                    color = if (isCurrent) Color(0xFF00E5FF) else if (isUnlocked) Color(0xFF00E676) else Color.DarkGray,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold
+                                SpiritStoneView(
+                                    spiritStoneCount = 60,
+                                    level = tier.level,
+                                    modifier = Modifier.size(52.dp)
                                 )
                             }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = tier.description,
-                                color = if (isUnlocked) Color.White else Color.Gray,
-                                fontSize = 12.sp
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = tier.features,
-                                color = if (isUnlocked) Color(0xFFEA80FC) else Color.DarkGray,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Medium
-                            )
+
+                            Spacer(modifier = Modifier.width(12.dp))
+
+                            // Tier Text Information
+                            Column(
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "第 ${tier.level} 阶 · ${tier.name}",
+                                        color = if (isUnlocked) Color(0xFFFFD700) else Color.Gray,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = if (isCurrent) "★ 当前" else if (isUnlocked) "已解锁" else "未解锁",
+                                        color = if (isCurrent) Color(0xFF00E5FF) else if (isUnlocked) Color(0xFF00E676) else Color.DarkGray,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = tier.description,
+                                    color = if (isUnlocked) Color.White else Color.Gray,
+                                    fontSize = 11.sp,
+                                    maxLines = 1
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = tier.features,
+                                    color = if (isUnlocked) Color(0xFFEA80FC) else Color.DarkGray,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
                         }
                     }
                 }
