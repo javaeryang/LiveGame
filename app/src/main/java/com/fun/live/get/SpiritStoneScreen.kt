@@ -1,9 +1,12 @@
 package com.`fun`.live.get
 
+import android.media.AudioAttributes
+import android.media.AudioManager
+import android.media.SoundPool
+import android.os.Build
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -37,15 +40,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -146,6 +152,56 @@ fun SpiritStoneScreen() {
     var spiritStoneCount by remember { mutableIntStateOf(0) }
     var level by remember { mutableIntStateOf(1) }
 
+    // Active Turntable Element Index for Pulse (-1 = none, 0..4 = 金木水火土)
+    var activeElementIndex by remember { mutableIntStateOf(-1) }
+
+    // Converging Elemental Light Particles List (五行光点汇聚动画)
+    val convergingParticles = remember { mutableStateListOf<ConvergingElementalParticle>() }
+
+    // Frame Ticker for 60FPS smooth particle updates
+    var particleFrameTicker by remember { mutableLongStateOf(0L) }
+
+    LaunchedEffect(convergingParticles.isNotEmpty()) {
+        while (convergingParticles.isNotEmpty()) {
+            withFrameNanos { particleFrameTicker = it }
+        }
+    }
+
+    // SoundPool Player setup for "凝练灵石" crystal sound effect
+    val soundPool = remember {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            SoundPool.Builder()
+                .setMaxStreams(8)
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_GAME)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
+                .build()
+        } else {
+            @Suppress("DEPRECATION")
+            SoundPool(8, AudioManager.STREAM_MUSIC, 0)
+        }
+    }
+    var soundId by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(Unit) {
+        soundId = soundPool.load(context, R.raw.spirit_condense, 1)
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            soundPool.release()
+        }
+    }
+
+    fun playCondenseSound() {
+        if (soundId != 0) {
+            soundPool.play(soundId, 1.0f, 1.0f, 1, 0, 1.0f)
+        }
+    }
+
     // History Log Dialog State
     var showHistoryDialog by remember { mutableStateOf(false) }
     val historyLogs = remember { mutableStateListOf<ClickRecord>() }
@@ -198,6 +254,31 @@ fun SpiritStoneScreen() {
 
     // Handle Spirit Stone gather action (+2)
     fun gatherSpiritStone() {
+        // 1. Play crystal spirit stone sound effect
+        playCondenseSound()
+
+        // 2. Advance active element node index on turntable
+        activeElementIndex = (activeElementIndex + 1) % FIVE_ELEMENTS.size
+
+        // 3. Trigger Five Elements light particles starting from 金, 木, 水, 火, 土 nodes to Spirit Stone center
+        val now = System.currentTimeMillis()
+        FIVE_ELEMENTS.forEachIndexed { i, node ->
+            val rad = Math.toRadians(node.angleDegrees.toDouble()).toFloat()
+            convergingParticles.add(
+                ConvergingElementalParticle(
+                    elementName = node.name,
+                    color = node.color,
+                    startAngleRad = rad,
+                    startRadiusRatio = 0.38f,
+                    targetYOffsetDp = -25f,
+                    durationMs = 420f + i * 25f,
+                    curveOffsetDp = if (i % 2 == 0) 25f else -25f,
+                    creationTimeMs = now
+                )
+            )
+        }
+
+        // 4. Update Spirit Stone count
         spiritStoneCount += 2
 
         if (level < 100) {
@@ -210,7 +291,7 @@ fun SpiritStoneScreen() {
             }
         } else {
             // Reached Level 100 (至尊水晶)!
-            // Only accumulate spirit stone count continuously without deducting 100!
+            // Accumulate spirit stone count continuously
         }
 
         // Record click to SQLite Database with timestamp and points
@@ -274,7 +355,6 @@ fun SpiritStoneScreen() {
                 // --- Top Header: Spirit Stone Realm & Progress Bar ---
                 HeaderSection(
                     level = level,
-                    count = spiritStoneCount,
                     tierName = getLevelTierName(level),
                     onOpenHistory = { showHistoryDialog = true },
                     onOpenLevelPreview = { showLevelPreviewDialog = true }
@@ -297,7 +377,8 @@ fun SpiritStoneScreen() {
                         ElementalTurntable(
                             modifier = Modifier
                                 .size(340.dp)
-                                .padding(top = 40.dp)
+                                .padding(top = 40.dp),
+                            activeElementIndex = activeElementIndex
                         )
 
                         // B. Floating Spirit Stone (悬空灵石 / 至尊水晶) hovering above turntable
@@ -309,7 +390,106 @@ fun SpiritStoneScreen() {
                                 .padding(bottom = 60.dp)
                         )
 
-                        // C. Explosive Level Up Particle Burst Canvas
+                        // C. Converging Elemental Light Particles Overlay (五行灵石光点汇聚动画)
+                        if (convergingParticles.isNotEmpty()) {
+                            if (particleFrameTicker >= 0L) {
+                                val currentTime = System.currentTimeMillis()
+
+                                Canvas(modifier = Modifier.fillMaxSize()) {
+                                    val center = Offset(size.width / 2f, size.height / 2f)
+                                    val turntableRadius = minOf(size.width, size.height) * 0.42f
+                                    val startRadius = turntableRadius * 0.72f
+                                    val targetPos = Offset(center.x, center.y - 25.dp.toPx()) // Spirit Stone Center
+
+                                    val toRemove = mutableListOf<ConvergingElementalParticle>()
+
+                                    convergingParticles.forEach { particle ->
+                                        val elapsed = (currentTime - particle.creationTimeMs).toFloat()
+                                        val progress = (elapsed / particle.durationMs).coerceIn(0f, 1f)
+
+                                        // Start position on turntable element node
+                                        val startX = center.x + (startRadius * cos(particle.startAngleRad.toDouble())).toFloat()
+                                        val startY = center.y + (startRadius * sin(particle.startAngleRad.toDouble())).toFloat()
+                                        val startPos = Offset(startX, startY)
+
+                                        // Control point for curved arc
+                                        val midX = (startX + targetPos.x) / 2f + particle.curveOffsetDp.dp.toPx()
+                                        val midY = (startY + targetPos.y) / 2f - 15.dp.toPx()
+                                        val controlPos = Offset(midX, midY)
+
+                                        // Quadratic Bezier interpolation
+                                        fun bezierPoint(t: Float): Offset {
+                                            val invT = 1f - t
+                                            val x = invT * invT * startPos.x + 2f * invT * t * controlPos.x + t * t * targetPos.x
+                                            val y = invT * invT * startPos.y + 2f * invT * t * controlPos.y + t * t * targetPos.y
+                                            return Offset(x, y)
+                                        }
+
+                                        val currentPos = bezierPoint(progress)
+
+                                        // Draw Tail Trailing Line
+                                        if (progress > 0.05f) {
+                                            val trailPos = bezierPoint((progress - 0.12f).coerceAtLeast(0f))
+                                            drawLine(
+                                                brush = Brush.linearGradient(
+                                                    colors = listOf(
+                                                        particle.color.copy(alpha = (1f - progress) * 0.85f),
+                                                        particle.color.copy(alpha = 0f)
+                                                    ),
+                                                    start = currentPos,
+                                                    end = trailPos
+                                                ),
+                                                start = currentPos,
+                                                end = trailPos,
+                                                strokeWidth = (1f - progress * 0.4f) * 6.dp.toPx()
+                                            )
+                                        }
+
+                                        // Draw Glowing Particle Head
+                                        val pRadius = (1f - progress * 0.25f) * 7.dp.toPx()
+                                        drawCircle(
+                                            brush = Brush.radialGradient(
+                                                colors = listOf(
+                                                    Color.White,
+                                                    particle.color,
+                                                    Color.Transparent
+                                                ),
+                                                center = currentPos,
+                                                radius = pRadius * 2.2f
+                                            ),
+                                            radius = pRadius * 2.2f,
+                                            center = currentPos
+                                        )
+                                        drawCircle(
+                                            color = Color.White,
+                                            radius = pRadius * 0.7f,
+                                            center = currentPos
+                                        )
+
+                                        // Center Impact Ripple Flash when particle converges
+                                        if (progress >= 0.85f) {
+                                            val impactAlpha = (1f - (progress - 0.85f) / 0.15f).coerceIn(0f, 1f)
+                                            drawCircle(
+                                                color = particle.color.copy(alpha = impactAlpha * 0.5f),
+                                                radius = (progress - 0.85f) * 100.dp.toPx(),
+                                                center = targetPos,
+                                                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx())
+                                            )
+                                        }
+
+                                        if (progress >= 1f) {
+                                            toRemove.add(particle)
+                                        }
+                                    }
+
+                                    if (toRemove.isNotEmpty()) {
+                                        convergingParticles.removeAll(toRemove)
+                                    }
+                                }
+                            }
+                        }
+
+                        // D. Explosive Level Up Particle Burst Canvas
                         if (burstAnim.value in 0.001f..0.999f) {
                             Canvas(modifier = Modifier.fillMaxSize()) {
                                 val p = burstAnim.value
@@ -339,7 +519,7 @@ fun SpiritStoneScreen() {
                             }
                         }
 
-                        // D. Floating "+2" Particles
+                        // E. Floating "+2" Particles
                         floatingParticles.forEach { particle ->
                             key(particle.id) {
                                 FloatingPlusTwoText(
@@ -422,78 +602,111 @@ fun SpiritStoneScreen() {
 }
 
 /**
- * Prominent Spirit Stone Count Display positioned directly below the Five Elements Turntable (转盘正下方)
+ * Top Header Bar (顶栏状态展示)
  */
 @Composable
-private fun SpiritStoneCountDisplay(
-    count: Int,
-    level: Int
+private fun HeaderSection(
+    level: Int,
+    tierName: String,
+    onOpenHistory: () -> Unit,
+    onOpenLevelPreview: () -> Unit
 ) {
-    val infiniteTransition = rememberInfiniteTransition(label = "CountPulse")
-    val borderGlow by infiniteTransition.animateFloat(
-        initialValue = 0.5f,
-        targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1400, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "CountBorderGlow"
-    )
-
-    Box(
+    Row(
         modifier = Modifier
-            .padding(top = 4.dp, bottom = 8.dp)
-            .clip(RoundedCornerShape(22.dp))
-            .background(
-                Brush.horizontalGradient(
-                    colors = listOf(
-                        Color(0xBB310052),
-                        Color(0xDD4A148C),
-                        Color(0xBB310052)
+            .fillMaxWidth()
+            .padding(top = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Realm Tier Title Badge
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(20.dp))
+                .background(
+                    brush = Brush.horizontalGradient(
+                        colors = listOf(
+                            Color(0xFF4A148C),
+                            Color(0xFF8E24AA)
+                        )
                     )
                 )
-            )
-            .border(
-                width = 1.5.dp,
-                brush = Brush.horizontalGradient(
-                    colors = listOf(
-                        Color(0xFFFFD700).copy(alpha = borderGlow),
-                        Color(0xFFE040FB).copy(alpha = borderGlow),
-                        Color(0xFF00E5FF).copy(alpha = borderGlow),
-                        Color(0xFFFFD700).copy(alpha = borderGlow)
-                    )
-                ),
-                shape = RoundedCornerShape(22.dp)
-            )
-            .padding(horizontal = 24.dp, vertical = 8.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center
+                .border(
+                    width = 1.dp,
+                    brush = Brush.horizontalGradient(
+                        colors = listOf(
+                            Color(0xFFFFD700),
+                            Color(0xFFE040FB)
+                        )
+                    ),
+                    shape = RoundedCornerShape(20.dp)
+                )
+                .clickable { onOpenLevelPreview() }
+                .padding(horizontal = 14.dp, vertical = 6.dp)
         ) {
             Text(
-                text = if (level >= 100) "✨ 至尊灵石点数：" else "💎 当前灵石点数：",
-                color = if (level >= 100) Color(0xFFFFD700) else Color(0xFFE040FB),
-                fontSize = 15.sp,
+                text = "第 $level 阶 · $tierName 📖",
+                color = Color.White,
+                fontSize = 14.sp,
                 fontWeight = FontWeight.Bold
             )
+        }
 
-            Spacer(modifier = Modifier.width(4.dp))
-
+        // History Log Button
+        Box(
+            modifier = Modifier
+                .clip(CircleShape)
+                .background(Color(0xFF311B92))
+                .border(1.dp, Color(0xFFBA68C8), CircleShape)
+                .clickable { onOpenHistory() }
+                .padding(horizontal = 12.dp, vertical = 6.dp)
+        ) {
             Text(
-                text = "$count",
-                color = Color(0xFFFFD700),
-                fontSize = 24.sp,
-                fontWeight = FontWeight.ExtraBold,
-                letterSpacing = 1.sp
+                text = "📜 炼石日志",
+                color = Color(0xFFFFE082),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium
             )
         }
     }
 }
 
 /**
- * Self-animating "+2" Floating Particle Text
+ * Spirit Stone Points Display Below Turntable (转盘下方灵石数量组件)
+ */
+@Composable
+private fun SpiritStoneCountDisplay(
+    count: Int,
+    level: Int
+) {
+    Box(
+        modifier = Modifier
+            .padding(top = 10.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(Color(0xBB1A0033))
+            .border(
+                width = 1.dp,
+                brush = Brush.horizontalGradient(
+                    colors = listOf(
+                        Color(0xFFE040FB),
+                        Color(0xFFFFD700),
+                        Color(0xFF00E5FF)
+                    )
+                ),
+                shape = RoundedCornerShape(20.dp)
+            )
+            .padding(horizontal = 24.dp, vertical = 8.dp)
+    ) {
+        Text(
+            text = if (level >= 100) "至尊水晶灵力: $count 灵石" else "已凝炼灵石: $count / 100",
+            color = Color(0xFFFFD700),
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+/**
+ * Floating "+2" Text Particle
  */
 @Composable
 private fun FloatingPlusTwoText(
@@ -501,532 +714,31 @@ private fun FloatingPlusTwoText(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val anim = remember { Animatable(0f) }
+    val animProgress = remember { Animatable(0f) }
 
-    LaunchedEffect(Unit) {
-        anim.animateTo(
+    LaunchedEffect(particle.id) {
+        animProgress.animateTo(
             targetValue = 1f,
-            animationSpec = tween(durationMillis = 750, easing = FastOutSlowInEasing)
+            animationSpec = tween(durationMillis = 800, easing = FastOutSlowInEasing)
         )
         onDismiss()
     }
 
-    val progress = anim.value
-    val alpha = (1f - progress).coerceIn(0f, 1f)
-    val yOffsetDp = -progress * 110f
-    val scale = 1f + progress * 0.35f
+    val yOffsetDp = (-animProgress.value * 120f).dp
+    val alpha = (1f - animProgress.value).coerceIn(0f, 1f)
 
     Text(
-        text = "+2",
+        text = "+2 灵石",
         color = particle.color.copy(alpha = alpha),
-        fontSize = (26 * scale).sp,
-        fontWeight = FontWeight.ExtraBold,
-        modifier = modifier.offset(
-            x = particle.xOffsetDp.dp,
-            y = yOffsetDp.dp
-        )
+        fontSize = (20 + animProgress.value * 6).sp,
+        fontWeight = FontWeight.Black,
+        modifier = modifier
+            .offset(x = particle.xOffsetDp.dp, y = yOffsetDp)
     )
 }
 
 /**
- * Top Header displaying Realm, Tier Name, Level, Progress and Action Buttons (💎 图鉴 / 📜 日志)
- */
-@Composable
-private fun HeaderSection(
-    level: Int,
-    count: Int,
-    tierName: String,
-    onOpenHistory: () -> Unit,
-    onOpenLevelPreview: () -> Unit
-) {
-    val infiniteTransition = rememberInfiniteTransition(label = "HeaderGlow")
-    val glowPulse by infiniteTransition.animateFloat(
-        initialValue = 0.6f,
-        targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1500, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "HeaderGlowPulse"
-    )
-
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 16.dp)
-            .clip(RoundedCornerShape(20.dp))
-            .background(Color(0x551A0033))
-            .border(
-                width = 1.5.dp,
-                brush = Brush.horizontalGradient(
-                    listOf(
-                        Color(0xFFFFD700).copy(alpha = glowPulse),
-                        Color(0xFFE040FB).copy(alpha = glowPulse),
-                        Color(0xFFFFD700).copy(alpha = glowPulse)
-                    )
-                ),
-                shape = RoundedCornerShape(20.dp)
-            )
-            .padding(16.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            // Level Badge
-            Box(
-                modifier = Modifier
-                    .clip(CircleShape)
-                    .background(
-                        Brush.radialGradient(
-                            listOf(Color(0xFFFFD700), Color(0xFF8E24AA))
-                        )
-                    )
-                    .padding(horizontal = 12.dp, vertical = 4.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "等阶 $level",
-                    color = Color(0xFF1A0033),
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 14.sp
-                )
-            }
-
-            // Tier Name
-            Text(
-                text = "【$tierName】",
-                color = Color(0xFFFFD700),
-                fontSize = 17.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 1.5.sp
-            )
-
-            // Action Buttons Row (💎 图鉴 & 📜 日志)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                // 图鉴按钮
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color(0xAA4A148C))
-                        .border(1.dp, Color(0xFFFFD700), RoundedCornerShape(12.dp))
-                        .clickable { onOpenLevelPreview() }
-                        .padding(horizontal = 8.dp, vertical = 5.dp)
-                ) {
-                    Text(
-                        text = "💎 图鉴",
-                        color = Color(0xFFFFD700),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
-                // 日志按钮
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color(0xAA310052))
-                        .border(1.dp, Color(0xFFE040FB), RoundedCornerShape(12.dp))
-                        .clickable { onOpenHistory() }
-                        .padding(horizontal = 8.dp, vertical = 5.dp)
-                ) {
-                    Text(
-                        text = "📜 日志",
-                        color = Color(0xFFE040FB),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Progress Text
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = if (level >= 100) "破阶状态" else "灵石进阶进度",
-                color = Color(0xFFE040FB),
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium
-            )
-
-            Text(
-                text = if (level >= 100) "已登顶至尊 ($count 点)" else "$count / 100",
-                color = Color.White,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold
-            )
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Custom Streamer Progress Bar
-        val progressFraction = if (level >= 100) 1.0f else (count / 100f).coerceIn(0.001f, 1.0f)
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(12.dp)
-                .clip(RoundedCornerShape(6.dp))
-                .background(Color(0xFF140026))
-                .border(1.dp, Color(0x66BA68C8), RoundedCornerShape(6.dp))
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth(progressFraction)
-                    .fillMaxSize()
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(
-                        Brush.horizontalGradient(
-                            listOf(
-                                Color(0xFF7B1FA2),
-                                Color(0xFFE040FB),
-                                Color(0xFFFFD700)
-                            )
-                        )
-                    )
-            )
-        }
-    }
-}
-
-/**
- * 1-100 Spirit Stone Level List Preview Dialog (100 阶灵石等阶图鉴预览弹窗)
- */
-@Composable
-private fun LevelPreviewDialog(
-    currentLevel: Int,
-    onClose: () -> Unit
-) {
-    val listState = rememberLazyListState()
-    val coroutineScope = rememberCoroutineScope()
-
-    Box(
-        modifier = Modifier
-            .padding(16.dp)
-            .fillMaxWidth()
-            .fillMaxHeight(0.85f)
-            .clip(RoundedCornerShape(24.dp))
-            .background(
-                Brush.radialGradient(
-                    colors = listOf(
-                        Color(0xFF2A004D),
-                        Color(0xFF140026),
-                        Color(0xFF0D001A)
-                    )
-                )
-            )
-            .border(
-                width = 2.dp,
-                brush = Brush.horizontalGradient(
-                    listOf(Color(0xFFFFD700), Color(0xFFE040FB), Color(0xFF00E5FF), Color(0xFFFFD700))
-                ),
-                shape = RoundedCornerShape(24.dp)
-            )
-            .padding(18.dp)
-    ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "💎 1-100 阶灵石等阶图鉴",
-                    color = Color(0xFFFFD700),
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.sp
-                )
-
-                Box(
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .background(Color(0x66E040FB))
-                        .clickable { onClose() }
-                        .padding(horizontal = 12.dp, vertical = 5.dp)
-                ) {
-                    Text(text = "关闭", color = Color.White, fontSize = 12.sp)
-                }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Current Level Banner
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(Color(0x554A148C))
-                    .border(1.dp, Color(0xFFE040FB), RoundedCornerShape(14.dp))
-                    .padding(10.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "当前等阶：第 $currentLevel 阶 · ${getLevelTierName(currentLevel)}",
-                    color = Color(0xFFFFD700),
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Quick Jump Chips Row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                val jumpTargets = listOf(
-                    "第 1 阶" to 0,
-                    "第 30 阶" to 29,
-                    "第 50 阶" to 49,
-                    "第 100 阶 至尊水晶" to 99
-                )
-
-                jumpTargets.forEach { (label, index) ->
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(if (index == 99) Color(0xAAFFD700) else Color(0x444A148C))
-                            .clickable {
-                                coroutineScope.launch {
-                                    listState.scrollToItem(index)
-                                }
-                            }
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            text = label,
-                            color = if (index == 99) Color(0xFF1A0033) else Color.White,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // 100 Level Tiers LazyColumn List
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                items(LEVEL_TIERS_LIST, key = { it.level }) { tier ->
-                    val isCurrent = tier.level == currentLevel
-                    val isUnlocked = tier.level <= currentLevel
-
-                    val cardBg = when {
-                        isCurrent -> Color(0xAA4A148C)
-                        tier.level == 100 -> Color(0x666A1B9A)
-                        isUnlocked -> Color(0x443B0066)
-                        else -> Color(0x22140026)
-                    }
-
-                    val borderColor = when {
-                        isCurrent || tier.level == 100 -> Color(0xFFFFD700)
-                        isUnlocked -> Color(0xFFE040FB)
-                        else -> Color(0x44BA68C8)
-                    }
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(cardBg)
-                            .border(1.dp, borderColor, RoundedCornerShape(16.dp))
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // Mini Spirit Stone / Supreme Crystal Visual Preview
-                        SpiritStoneView(
-                            spiritStoneCount = 50,
-                            level = tier.level,
-                            modifier = Modifier.size(54.dp)
-                        )
-
-                        Spacer(modifier = Modifier.width(10.dp))
-
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(
-                                    text = "第 ${tier.level} 阶 · ${tier.name}",
-                                    color = if (tier.level == 100) Color(0xFFFFD700) else if (isUnlocked) Color.White else Color.Gray,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-
-                                // Status Tag
-                                val (statusText, statusBg, statusTextColor) = when {
-                                    isCurrent -> Triple("🌟 当前", Color(0xFFFFD700), Color(0xFF1A0033))
-                                    tier.level == 100 && isUnlocked -> Triple("✨ 满阶至尊", Color(0xFFFFD700), Color(0xFF1A0033))
-                                    isUnlocked -> Triple("✓ 已解锁", Color(0x4400E676), Color(0xFF00E676))
-                                    else -> Triple("🔒 未解锁", Color(0x33FFFFFF), Color.Gray)
-                                }
-
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(statusBg)
-                                        .padding(horizontal = 7.dp, vertical = 2.dp)
-                                ) {
-                                    Text(
-                                        text = statusText,
-                                        color = statusTextColor,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(3.dp))
-
-                            Text(
-                                text = tier.description,
-                                color = if (isUnlocked) Color.White.copy(alpha = 0.85f) else Color.Gray,
-                                fontSize = 11.sp
-                            )
-
-                            Spacer(modifier = Modifier.height(2.dp))
-
-                            Text(
-                                text = "特性: ${tier.features}",
-                                color = if (tier.level == 100) Color(0xFFFFD700) else Color(0xFFE040FB),
-                                fontSize = 10.sp
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/**
- * Dialog displaying SQLite Database Click History Records
- */
-@Composable
-private fun HistoryLogsDialog(
-    logs: List<ClickRecord>,
-    totalClickCount: Int,
-    onClose: () -> Unit
-) {
-    Box(
-        modifier = Modifier
-            .padding(20.dp)
-            .fillMaxWidth()
-            .fillMaxHeight(0.7f)
-            .clip(RoundedCornerShape(24.dp))
-            .background(
-                Brush.radialGradient(
-                    colors = listOf(
-                        Color(0xFF2A004D),
-                        Color(0xFF140026),
-                        Color(0xFF0D001A)
-                    )
-                )
-            )
-            .border(
-                width = 2.dp,
-                brush = Brush.horizontalGradient(
-                    listOf(Color(0xFFFFD700), Color(0xFFE040FB), Color(0xFFFFD700))
-                ),
-                shape = RoundedCornerShape(24.dp)
-            )
-            .padding(20.dp)
-    ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "📜 数据库炼石记录 (共 $totalClickCount 次)",
-                    color = Color(0xFFFFD700),
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Box(
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .background(Color(0x66E040FB))
-                        .clickable { onClose() }
-                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                ) {
-                    Text(text = "关闭", color = Color.White, fontSize = 12.sp)
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            if (logs.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .weight(1f),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(text = "暂无数据库炼石记录", color = Color.Gray, fontSize = 14.sp)
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(logs, key = { it.id }) { record ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(Color(0x443B0066))
-                                .padding(12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column {
-                                Text(
-                                    text = record.formattedTime,
-                                    color = Color(0xFFBA68C8),
-                                    fontSize = 12.sp
-                                )
-                                Text(
-                                    text = "累积: ${record.totalCount} 灵石 | 第 ${record.level} 阶",
-                                    color = Color.White.copy(alpha = 0.9f),
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-
-                            Text(
-                                text = "+${record.points}",
-                                color = Color(0xFFFFD700),
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.ExtraBold
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/**
- * Level Up Celebration Banner (灵石破阶升级)
+ * Level Up Celebration Banner
  */
 @Composable
 private fun LevelUpCelebrationBanner(
@@ -1035,60 +747,281 @@ private fun LevelUpCelebrationBanner(
 ) {
     Box(
         modifier = Modifier
-            .padding(24.dp)
+            .fillMaxWidth(0.85f)
             .clip(RoundedCornerShape(24.dp))
             .background(
-                Brush.radialGradient(
+                brush = Brush.verticalGradient(
                     colors = listOf(
-                        Color(0xFF3B0066),
-                        Color(0xFF1A0033),
-                        Color(0xFF0D001A)
+                        Color(0xFF6A1B9A),
+                        Color(0xFF4A148C),
+                        Color(0xFF311B92)
                     )
                 )
             )
             .border(
-                width = 2.5.dp,
+                width = 2.dp,
                 brush = Brush.horizontalGradient(
-                    listOf(
+                    colors = listOf(
                         Color(0xFFFFD700),
-                        Color(0xFFE040FB),
-                        Color(0xFF00E5FF),
+                        Color(0xFFFFE082),
                         Color(0xFFFFD700)
                     )
                 ),
                 shape = RoundedCornerShape(24.dp)
             )
-            .padding(32.dp),
+            .padding(24.dp),
         contentAlignment = Alignment.Center
     ) {
         Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                text = if (level == 100) "👑 至 尊 登 顶 👑" else "✨ 灵 石 进 阶 ✨",
+                text = "✨ 灵 石 进 阶 ✨",
                 color = Color(0xFFFFD700),
-                fontSize = 26.sp,
-                fontWeight = FontWeight.ExtraBold,
-                letterSpacing = 2.sp
+                fontSize = 20.sp,
+                fontWeight = FontWeight.ExtraBold
             )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
+            Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "突破至 第 $level 阶 · $tierName",
-                color = Color(0xFFE040FB),
-                fontSize = 18.sp,
+                text = "恭喜突破至第 $level 阶",
+                color = Color.White,
+                fontSize = 16.sp,
                 fontWeight = FontWeight.Bold
             )
+            Text(
+                text = "【$tierName】",
+                color = Color(0xFFE040FB),
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Black,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        }
+    }
+}
+
+/**
+ * SQLite Click Logs History Dialog
+ */
+@Composable
+private fun HistoryLogsDialog(
+    logs: List<ClickRecord>,
+    totalClickCount: Int,
+    onClose: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth(0.9f)
+            .fillMaxHeight(0.75f)
+            .clip(RoundedCornerShape(24.dp)),
+        color = Color(0xFF1B0033)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .border(2.dp, Color(0xFFBA68C8), RoundedCornerShape(24.dp))
+                .padding(20.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "📜 炼石修仙日志",
+                    color = Color(0xFFFFD700),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "✖ 关闭",
+                    color = Color(0xAAFFFFFF),
+                    fontSize = 14.sp,
+                    modifier = Modifier.clickable { onClose() }
+                )
+            }
 
             Spacer(modifier = Modifier.height(8.dp))
-
             Text(
-                text = if (level == 100) "已解锁终极最高等阶【至尊水晶】！" else "数据已存入数据库，品质大增！",
-                color = Color.White.copy(alpha = 0.9f),
-                fontSize = 14.sp
+                text = "累计凝炼次数: $totalClickCount 次 (SQLite持久化存储)",
+                color = Color(0xFFE040FB),
+                fontSize = 12.sp
             )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            if (logs.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "暂无凝炼记录，快去点击按钮吧！",
+                        color = Color.Gray,
+                        fontSize = 14.sp
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.weight(1f)
+                ) {
+                    items(logs) { log ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 6.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xFF2A004D))
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column {
+                                Text(
+                                    text = "凝炼 +${log.points} 灵石 (第 ${log.level} 阶)",
+                                    color = Color(0xFFFFE082),
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = log.formattedTime,
+                                    color = Color.LightGray,
+                                    fontSize = 11.sp
+                                )
+                            }
+                            Text(
+                                text = "蓄积: ${log.totalCount}",
+                                color = Color(0xFF00E5FF),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Spirit Stone Level List Preview Dialog (1 - 100 阶灵石等阶图鉴预览)
+ */
+@Composable
+private fun LevelPreviewDialog(
+    currentLevel: Int,
+    onClose: () -> Unit
+) {
+    val listState = rememberLazyListState()
+
+    // Auto scroll to current active level in tier list
+    LaunchedEffect(currentLevel) {
+        if (currentLevel in 1..100) {
+            listState.scrollToItem((currentLevel - 1).coerceIn(0, 99))
+        }
+    }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth(0.92f)
+            .fillMaxHeight(0.82f)
+            .clip(RoundedCornerShape(24.dp)),
+        color = Color(0xFF16002A)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .border(2.dp, Color(0xFFFFD700), RoundedCornerShape(24.dp))
+                .padding(20.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "📖 灵石百阶全景图鉴",
+                    color = Color(0xFFFFD700),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "✖ 关闭",
+                    color = Color(0xAAFFFFFF),
+                    fontSize = 14.sp,
+                    modifier = Modifier.clickable { onClose() }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "支持 1 到 100 阶至尊水晶进化 · 当前位阶: 第 $currentLevel 阶",
+                color = Color(0xFFE040FB),
+                fontSize = 12.sp
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.weight(1f)
+            ) {
+                items(LEVEL_TIERS_LIST) { tier ->
+                    val isCurrent = tier.level == currentLevel
+                    val isUnlocked = tier.level <= currentLevel
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 5.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(
+                                if (isCurrent) Color(0xFF4A148C)
+                                else if (isUnlocked) Color(0xFF26004D)
+                                else Color(0xFF1A0033)
+                            )
+                            .border(
+                                width = if (isCurrent) 1.5.dp else 0.5.dp,
+                                color = if (isCurrent) Color(0xFFFFD700)
+                                else if (isUnlocked) Color(0xFF8E24AA)
+                                else Color(0x338E24AA),
+                                shape = RoundedCornerShape(16.dp)
+                            )
+                            .padding(12.dp)
+                    ) {
+                        Column {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "第 ${tier.level} 阶 · ${tier.name}",
+                                    color = if (isUnlocked) Color(0xFFFFD700) else Color.Gray,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = if (isCurrent) "★ 当前位阶" else if (isUnlocked) "已解锁" else "未解锁",
+                                    color = if (isCurrent) Color(0xFF00E5FF) else if (isUnlocked) Color(0xFF00E676) else Color.DarkGray,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = tier.description,
+                                color = if (isUnlocked) Color.White else Color.Gray,
+                                fontSize = 12.sp
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = tier.features,
+                                color = if (isUnlocked) Color(0xFFEA80FC) else Color.DarkGray,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }

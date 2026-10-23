@@ -22,3 +22,18 @@ data class StarParticle(
     val baseAlpha: Float = Random.nextFloat() * 0.7f + 0.3f,
     val color: Color = if (Random.nextBoolean()) Color(0xFFE040FB) else Color(0xFF80DEEA)
 )
+
+/**
+ * Data class for Elemental Light Particles (五行灵石光点) converging from Five Elements Turntable to Spirit Stone center.
+ */
+data class ConvergingElementalParticle(
+    val id: Long = System.nanoTime() + Random.nextLong(0, 100000),
+    val elementName: String,
+    val color: Color,
+    val startAngleRad: Float,              // Initial angle on turntable circle
+    val startRadiusRatio: Float = 0.38f,  // Distance from turntable center
+    val targetYOffsetDp: Float = -25f,    // Target spirit stone center offset relative to turntable center
+    val durationMs: Float = 480f,          // Animation trajectory duration in ms
+    val curveOffsetDp: Float = (Random.nextFloat() - 0.5f) * 35f, // Curved arc offset
+    val creationTimeMs: Long = System.currentTimeMillis()
+)
