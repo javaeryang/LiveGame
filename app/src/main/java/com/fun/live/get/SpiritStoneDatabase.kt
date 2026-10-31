@@ -29,6 +29,17 @@ data class SavedState(
 )
 
 /**
+ * Local state snapshot used for backend sync. [dirty] = has unsynced local changes.
+ */
+data class SyncSnapshot(
+    val count: Int,
+    val level: Int,
+    val totalClicks: Int,
+    val updatedAt: Long,
+    val dirty: Boolean
+)
+
+/**
  * SQLite Persistence Database Helper for Spirit Stone.
  * Table 1: `click_records` - Stores every click event with timestamp and points.
  * Table 2: `spirit_stone_state` - Stores total count and level state across app restarts.
@@ -42,7 +53,7 @@ class SpiritStoneDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DATABASE_NAME = "spirit_stone.db"
-        private const val DATABASE_VERSION = 1
+        private const val DATABASE_VERSION = 2
 
         // Table 1: Click Records
         private const val TABLE_RECORDS = "click_records"
@@ -58,6 +69,8 @@ class SpiritStoneDatabase(context: Context) : SQLiteOpenHelper(
         private const val COLUMN_STATE_ID = "id"
         private const val COLUMN_STATE_COUNT = "count"
         private const val COLUMN_STATE_LEVEL = "level"
+        private const val COLUMN_STATE_UPDATED_AT = "updated_at"
+        private const val COLUMN_STATE_DIRTY = "dirty"
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -91,12 +104,68 @@ class SpiritStoneDatabase(context: Context) : SQLiteOpenHelper(
             put(COLUMN_STATE_LEVEL, 1)
         }
         db.insert(TABLE_STATE, null, initialValues)
+
+        addSyncColumns(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        db.execSQL("DROP TABLE IF EXISTS $TABLE_RECORDS")
-        db.execSQL("DROP TABLE IF EXISTS $TABLE_STATE")
-        onCreate(db)
+        // v1 -> v2: keep player data, only add sync columns
+        if (oldVersion < 2) {
+            addSyncColumns(db)
+        }
+    }
+
+    private fun addSyncColumns(db: SQLiteDatabase) {
+        db.execSQL("ALTER TABLE $TABLE_STATE ADD COLUMN $COLUMN_STATE_UPDATED_AT INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE $TABLE_STATE ADD COLUMN $COLUMN_STATE_DIRTY INTEGER NOT NULL DEFAULT 1")
+    }
+
+    /**
+     * Full local snapshot used for syncing with backend.
+     */
+    fun getSyncSnapshot(): SyncSnapshot {
+        val cursor = readableDatabase.query(
+            TABLE_STATE,
+            arrayOf(COLUMN_STATE_COUNT, COLUMN_STATE_LEVEL, COLUMN_STATE_UPDATED_AT, COLUMN_STATE_DIRTY),
+            "$COLUMN_STATE_ID = ?", arrayOf("1"), null, null, null
+        )
+        cursor.use {
+            if (it.moveToFirst()) {
+                return SyncSnapshot(
+                    count = it.getInt(0),
+                    level = it.getInt(1),
+                    totalClicks = getTotalClickCount(),
+                    updatedAt = it.getLong(2),
+                    dirty = it.getInt(3) == 1
+                )
+            }
+        }
+        return SyncSnapshot(0, 1, 0, 0L, false)
+    }
+
+    /**
+     * Marks local state as synced, only if it hasn't changed since [updatedAt] (avoids losing newer clicks).
+     */
+    fun markSynced(updatedAt: Long) {
+        val values = ContentValues().apply { put(COLUMN_STATE_DIRTY, 0) }
+        writableDatabase.update(
+            TABLE_STATE, values,
+            "$COLUMN_STATE_ID = ? AND $COLUMN_STATE_UPDATED_AT = ?",
+            arrayOf("1", updatedAt.toString())
+        )
+    }
+
+    /**
+     * Overwrites local state with data pulled from backend (marked as clean).
+     */
+    fun applyRemoteState(count: Int, level: Int, updatedAt: Long) {
+        val values = ContentValues().apply {
+            put(COLUMN_STATE_COUNT, count)
+            put(COLUMN_STATE_LEVEL, level)
+            put(COLUMN_STATE_UPDATED_AT, updatedAt)
+            put(COLUMN_STATE_DIRTY, 0)
+        }
+        writableDatabase.update(TABLE_STATE, values, "$COLUMN_STATE_ID = ?", arrayOf("1"))
     }
 
     /**
@@ -121,6 +190,8 @@ class SpiritStoneDatabase(context: Context) : SQLiteOpenHelper(
         val stateValues = ContentValues().apply {
             put(COLUMN_STATE_COUNT, totalCount)
             put(COLUMN_STATE_LEVEL, level)
+            put(COLUMN_STATE_UPDATED_AT, nowMs)
+            put(COLUMN_STATE_DIRTY, 1)
         }
         db.update(TABLE_STATE, stateValues, "$COLUMN_STATE_ID = ?", arrayOf("1"))
 

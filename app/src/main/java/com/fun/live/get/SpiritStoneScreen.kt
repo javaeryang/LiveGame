@@ -64,6 +64,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import android.util.Log
 import kotlinx.coroutines.launch
 import kotlin.math.cos
 import kotlin.math.sin
@@ -147,6 +150,9 @@ val LEVEL_TIERS_LIST = List(100) { i ->
 fun SpiritStoneScreen() {
     val context = LocalContext.current
     val db = remember { SpiritStoneDatabase(context) }
+    val syncRepo = remember { GameSyncRepository(context.applicationContext, db) }
+    val syncScope = rememberCoroutineScope()
+    var pushJob by remember { mutableStateOf<Job?>(null) }
 
     // Spirit Stone State (Level 1 to 100)
     var spiritStoneCount by remember { mutableIntStateOf(0) }
@@ -228,6 +234,15 @@ fun SpiritStoneScreen() {
         val logs = db.getRecentClickRecords(30)
         historyLogs.clear()
         historyLogs.addAll(logs)
+        Log.i("GameSync", "local load: count=${saved.count} level=${saved.level} history=${logs.size}")
+
+        // Sync with backend: push unsynced local data, then pull latest save
+        if (syncRepo.syncOnStart() != null) {
+            val synced = db.getSavedState()
+            spiritStoneCount = synced.count
+            level = synced.level
+            Log.i("GameSync", "UI refreshed from synced DB: count=${synced.count} level=${synced.level}")
+        }
     }
 
     // Trigger burst animation and level up banner when level changes
@@ -305,6 +320,15 @@ fun SpiritStoneScreen() {
         historyLogs.add(0, record)
         if (historyLogs.size > 50) {
             historyLogs.removeAt(historyLogs.lastIndex)
+        }
+
+        // Debounced push of local DB state to backend (auto-retries up to 5 times)
+        Log.d("GameSync", "click recorded: id=${record.id} count=${record.totalCount} level=${record.level}, push scheduled")
+        pushJob?.cancel()
+        pushJob = syncScope.launch {
+            delay(1500)
+            runCatching { syncRepo.pushFromDb() }
+                .onFailure { if (it !is CancellationException) Log.e("GameSync", "push failed: ${it.message}", it) }
         }
 
         // Add floating "+2" particle safely
